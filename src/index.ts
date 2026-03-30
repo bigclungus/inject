@@ -1,6 +1,12 @@
 const OMNI_URL = "http://127.0.0.1:8085/webhooks/bigclungus-main";
 const PORT = 9876;
 const HOST = "127.0.0.1";
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 600;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const server = Bun.serve({
   hostname: HOST,
@@ -29,17 +35,31 @@ const server = Bun.serve({
 
     const omniPayload = { content, user };
 
-    let omniRes: Response;
-    try {
-      omniRes = await fetch(OMNI_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(omniPayload),
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[inject] omni request failed: ${msg}`);
-      return new Response(`Bad Gateway: ${msg}`, { status: 502 });
+    let lastErr: string = "";
+    let omniRes: Response | null = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        omniRes = await fetch(OMNI_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(omniPayload),
+        });
+        if (omniRes.ok) break;
+        // Retry on server errors (5xx) or gateway not-ready (404 from omni itself)
+        lastErr = `omni responded ${omniRes.status}`;
+        console.warn(`[inject] attempt ${attempt}/${MAX_RETRIES}: ${lastErr}`);
+        if (attempt < MAX_RETRIES) await sleep(RETRY_DELAY_MS * attempt);
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : String(err);
+        console.warn(`[inject] attempt ${attempt}/${MAX_RETRIES}: request failed: ${lastErr}`);
+        if (attempt < MAX_RETRIES) await sleep(RETRY_DELAY_MS * attempt);
+      }
+    }
+
+    if (!omniRes) {
+      console.error(`[inject] all ${MAX_RETRIES} attempts failed: ${lastErr}`);
+      return new Response(`Bad Gateway: ${lastErr}`, { status: 502 });
     }
 
     const responseText = await omniRes.text();
