@@ -4,6 +4,12 @@ const HOST = "127.0.0.1";
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 600;
 
+const INJECT_SECRET = process.env.DISCORD_INJECT_SECRET ?? "";
+
+if (!INJECT_SECRET) {
+  console.warn("[inject] WARNING: DISCORD_INJECT_SECRET is not set — endpoint is unauthenticated");
+}
+
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -16,6 +22,13 @@ const server = Bun.serve({
 
     if (req.method !== "POST" || url.pathname !== "/inject") {
       return new Response("Not Found", { status: 404 });
+    }
+
+    if (INJECT_SECRET) {
+      const providedSecret = req.headers.get("x-inject-secret") ?? "";
+      if (providedSecret !== INJECT_SECRET) {
+        return new Response("Unauthorized", { status: 401 });
+      }
     }
 
     let body: { content?: string; user?: string; chat_id?: string };
